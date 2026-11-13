@@ -143,7 +143,8 @@ class DrlVelocity(Strategy):
             dcfg = self.cfg.get('drl', {}) or {}
             self.policy = DrlPolicy(self.weights, v_max=b['max_lin_vel'], w_max=b['max_ang_vel'],
                                     clip_to_platform=bool(dcfg.get('clip_to_platform', True)),
-                                    device=dcfg.get('device', 'cpu'))
+                                    device=dcfg.get('device', 'cpu'),
+                                    torch_threads=dcfg.get('torch_threads', 1))
         return self.policy
 
     def reset(self):

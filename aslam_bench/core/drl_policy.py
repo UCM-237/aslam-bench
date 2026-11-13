@@ -216,8 +216,13 @@ class DrlPolicy:
                      a ellos después de des-normalizar con los límites del entrenamiento.
     """
 
-    def __init__(self, weights, v_max=None, w_max=None, clip_to_platform=True, device='cpu'):
+    def __init__(self, weights, v_max=None, w_max=None, clip_to_platform=True, device='cpu',
+                 torch_threads=1):
         import torch
+        if torch_threads:
+            # la red es pequeña (~1 ms por paso): con varios episodios en paralelo (-j N) los
+            # hilos de torch por proceso saturan la CPU y el episodio va ~10 veces más lento
+            torch.set_num_threads(int(torch_threads))
         if not weights:
             raise ValueError('DRL: no se ha indicado el fichero de pesos (.pt). Usa drl.weights, '
                              'drl.agents, "DRL:<ruta.pt>" o la variable ASLAM_BENCH_DRL_WEIGHTS.')

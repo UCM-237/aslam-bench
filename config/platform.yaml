@@ -57,6 +57,7 @@ drl:
   step_period: 0.1           # s entre acciones (STEP_TIME del entrenamiento)
   clip_to_platform: true     # recortar (v, w) a platform.base (entrenado con 0,3 m/s y 1,9 rad/s)
   device: cpu
+  torch_threads: 1           # hilos de torch por proceso (1 = lo mejor con run_campaign -j N)
 
 episode:
   coverage_target: 0.95      # fracción del área alcanzable
