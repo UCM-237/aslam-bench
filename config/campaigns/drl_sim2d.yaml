@@ -1,0 +1,27 @@
+# Campaña DRL vs B0/B1 en el simulador 2D (con el RPLIDAR C1 de config/platform.yaml).
+#   python -m aslam_bench.tools.run_campaign config/campaigns/drl_sim2d.yaml --out results/ -j 4
+#
+# Elegir el agente (.pt = state_dict del actor TD3, p. ej. data/models/drl_active_slam/
+# td3_0_stage_0/actor_stage0_episode1000.pt de c3-aslamdrl-platform):
+#   * 'DRL'              -> drl.weights
+#   * 'DRL:<alias>'      -> drl.agents[<alias>]   (resultados en el método DRL_<alias>)
+#   * 'DRL:<ruta>.pt'    -> ese fichero           (resultados en DRL_<nombre del .pt>)
+# Las rutas relativas se resuelven respecto a este fichero o, si no existen, al directorio actual.
+name: drl_sim2d
+backend: sim2d
+maps: [rooms_small, office_corridor, cluttered_hall]
+methods: [B0, B1, DRL]
+n_starts: 10
+reps: 1
+start_seed: 42
+start_clearance: 0.5
+loc_modes:
+  oracle:     {odom_noise: [0.0, 0.0]}
+  odom_noise: {odom_noise: [0.03, 0.05]}
+drl:
+  weights: ../../models/actor_stage0_episode1000.pt     # <- cambia por tu agente
+  agents: {}
+    # td3_e500:  ../../models/actor_stage0_episode500.pt
+    # td3_e1000: ../../models/actor_stage0_episode1000.pt
+  clip_to_platform: true
+platform_overrides: {}

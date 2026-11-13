@@ -132,6 +132,10 @@ class EpisodeMonitor(Node):
         elif d['event'] == 'done':
             self.rec.log_goal(t, 'done', None, d.get('info'))
             self.explorer_done = True
+        elif d['event'] == 'policy':        # política de velocidad (DRL): tiempo de inferencia
+            self.rec.log_goal(t, 'policy', None, d.get('info'))
+        elif d['event'] == 'meta':          # datos del agente (ruta y hash de los pesos)
+            self.rec.meta.update(d.get('info') or {})
         elif d['event'] == 'nav_failed':
             self.rec.log_event(t, 'nav_failed', json.dumps(d.get('info', {})))
 

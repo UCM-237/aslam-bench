@@ -9,15 +9,18 @@ platform:
     max_lin_vel: 0.26        # m/s (Create 3 admite 0.306; 0.26 = valor por defecto de Nav2 en TurtleBot 4)
     max_ang_vel: 1.0         # rad/s
   lidar:
-    model: RPLIDAR A1M8      # el de TurtleBot 4 / TurtleBot 4 Lite
-    frame: rplidar_link
+    # RPLIDAR C1 (el del robot de c3-aslamdrl-platform y el que vio el agente DRL al entrenar):
+    # 5 kHz de muestreo a 10 Hz -> 500 haces (0,72°), 0,05-12 m (6 m con superficies oscuras).
+    # Iteración 1 usaba el RPLIDAR A1M8 del TurtleBot 4: range_min 0.15, n_beams 360, rate_hz 5.5.
+    model: RPLIDAR C1
+    frame: rplidar_link      # TurtleBot 4; en el Create 3 de c3-aslamdrl-platform es 'laser'
     topic: /scan
-    range_min: 0.15          # m
+    range_min: 0.05          # m
     range_max: 12.0          # m
     fov_deg: 360
-    n_beams: 360
-    rate_hz: 5.5
-    noise_std: 0.01          # m (simulador 2D)
+    n_beams: 500
+    rate_hz: 10.0
+    noise_std: 0.01          # m (simulador 2D; mismo valor que el sensor de entrenamiento)
   camera:
     model: OAK-D Lite (RGB, usada como monocular)
     enabled: false           # presente en el modelo y publicando, pero NO la consume ningún método en la iteración 1
@@ -44,6 +47,16 @@ exploration:
   goal_timeout_factor: 3.0   # timeout = max(min, factor * distancia / v_max)
   blacklist_radius: 0.5      # m, objetivos fallidos se vetan en este radio
   random_goal_dist: [1.0, 4.0]  # m, rango de distancia geodésica de B0
+
+# Agente DRL (TD3 de c3-aslamdrl-platform, rama drl). Solo lo usan los métodos 'DRL...'.
+# Elegir el .pt: aquí, en el bloque `drl:` de la campaña, con 'DRL:<ruta.pt>' / 'DRL:<alias>'
+# en `methods:`, con el argumento drl_weights:=... del launch o con ASLAM_BENCH_DRL_WEIGHTS.
+drl:
+  weights: ''                # actor_stage{S}_episode{N}.pt (state_dict del actor), para 'DRL'
+  agents: {}                 # alias -> .pt, para 'DRL:<alias>' (p. ej. varias semillas/episodios)
+  step_period: 0.1           # s entre acciones (STEP_TIME del entrenamiento)
+  clip_to_platform: true     # recortar (v, w) a platform.base (entrenado con 0,3 m/s y 1,9 rad/s)
+  device: cpu
 
 episode:
   coverage_target: 0.95      # fracción del área alcanzable

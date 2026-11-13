@@ -5,3 +5,5 @@ results/
 build/
 install/
 log/
+models/*.pt
+*.pt

@@ -1,0 +1,22 @@
+# Campaña DRL vs B0/B1 en Gazebo (gz sim + slam_toolbox; Nav2 solo para B0/B1).
+# Mismo convenio que drl_sim2d.yaml para elegir el .pt. En Jazzy, si el TurtleBot 4
+# espera TwistStamped en /cmd_vel, pon cmd_vel_stamped: 'true' en extra_args.
+name: drl_gazebo
+backend: gazebo
+maps: [rooms_small]
+methods: [B0, B1, DRL]
+n_starts: 5
+reps: 1
+start_seed: 42
+start_clearance: 0.5
+loc_modes:
+  slam: {}
+drl:
+  weights: ../../models/actor_stage0_episode1000.pt
+  agents: {}
+gazebo:
+  launch_package: aslam_bench
+  launch_file: episode.launch.py
+  startup_grace: 60
+  extra_args: {cmd_vel_stamped: 'false'}
+platform_overrides: {}

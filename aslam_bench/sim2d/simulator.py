@@ -227,6 +227,11 @@ def run_episode(gt: OccGrid, start_pose, method, cfg, out_dir, meta_extra=None, 
                 coverage_target=ep['coverage_target'], platform=cfg['platform']['name'],
                 odom_noise=list(odom_noise))
     meta.update(meta_extra or {})
+    vel_mode = explorer.velocity_mode            # política que emite (v, w): DRL
+    if vel_mode:
+        explorer.strategy.reset()
+        meta.update(explorer.strategy.describe())  # carga los pesos y guarda ruta + hash
+        step_period = explorer.strategy.step_period
     rec = EpisodeRecorder(out_dir, meta)
 
     true = np.array(start_pose, float)
@@ -237,13 +242,20 @@ def run_episode(gt: OccGrid, start_pose, method, cfg, out_dir, meta_extra=None, 
     cov_hist = []                           # (t, cov) para detectar estancamiento
     termination, collisions = None, 0
     grid = mapper.grid()
+    last_scan = None
+    t_act, v_cmd, w_cmd, dec_times, in_contact = -1e9, 0.0, 0.0, [], False
     while termination is None:
         if t - t_lidar >= lidar_period - 1e-9:
-            mapper.integrate(est, lidar.scan(true), lidar.angles)
+            last_scan = lidar.scan(true)
+            mapper.integrate(est, last_scan, lidar.angles)
             grid = mapper.grid()
             t_lidar = t
         if t - t_dec >= cfg['exploration']['replan_period'] - 1e-9:
             act = explorer.update(t, grid, est[:2], nav.status)
+            if vel_mode and dec_times:
+                # una fila por periodo de decisión con el tiempo medio de inferencia
+                rec.log_goal(t, 'policy', None, dict(act.info, decision_time=float(np.mean(dec_times))))
+                dec_times = []
             if act.kind == 'goal':
                 nav.set_goal(t, (act.goal.x, act.goal.y))
                 rec.log_goal(t, 'goal', act.goal, act.info)
@@ -275,7 +287,14 @@ def run_episode(gt: OccGrid, start_pose, method, cfg, out_dir, meta_extra=None, 
             rec.log_pose(t, true, est)
             break
 
-        v, w = nav.command(t, grid, est)
+        if vel_mode:
+            if t - t_act >= step_period - 1e-9:
+                v_cmd, w_cmd, pinfo = explorer.strategy.act(last_scan, lidar.angles, grid, est)
+                dec_times.append(pinfo['decision_time'])
+                t_act = t
+            v, w = v_cmd, w_cmd
+        else:
+            v, w = nav.command(t, grid, est)
         # movimiento real
         nx = true[0] + v * dt * math.cos(true[2] + w * dt / 2)
         ny = true[1] + v * dt * math.sin(true[2] + w * dt / 2)
@@ -284,10 +303,21 @@ def run_episode(gt: OccGrid, start_pose, method, cfg, out_dir, meta_extra=None, 
             dx, dy = nx - true[0], ny - true[1]
             true[:2] = nx, ny
             moved_v = v
+            in_contact = False
         else:
-            collisions += 1
-            rec.log_event(t, 'collision')
-            if v > 0:
+            if vel_mode:
+                # la política no tiene recuperación y sigue empujando: se cuenta cada contacto
+                # una sola vez (como un bumper), no cada paso bloqueado
+                if not in_contact:
+                    collisions += 1
+                    rec.log_event(t, 'collision')
+                in_contact = True
+            else:
+                collisions += 1
+                rec.log_event(t, 'collision')
+            if vel_mode:
+                pass
+            elif v > 0:
                 nav.on_collision(t)
             else:
                 nav.recover_until = -1e9     # no puede retroceder: replanifica desde aquí

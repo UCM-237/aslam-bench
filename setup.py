@@ -32,6 +32,7 @@ setup(
     entry_points={
         'console_scripts': [
             'explorer = aslam_bench.ros.explorer_node:main',
+            'drl_explorer = aslam_bench.ros.drl_explorer_node:main',
             'episode_monitor = aslam_bench.ros.episode_monitor_node:main',
             'run_campaign = aslam_bench.tools.run_campaign:main',
             'analyze = aslam_bench.tools.analyze:main',

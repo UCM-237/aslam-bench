@@ -83,6 +83,41 @@ def build_jobs(camp, cfg, maps_dir, out_root):
     return jobs
 
 
+def resolve_drl(cfg, camp, camp_dir):
+    """Fusiona el bloque `drl:` de la campaña y pasa a absolutas las rutas de los .pt.
+
+    Las rutas relativas se buscan primero respecto al fichero de campaña y, si no existen,
+    respecto al directorio de trabajo.
+    """
+    d = cfg.setdefault('drl', {})
+    for k, v in (camp.get('drl') or {}).items():
+        if k == 'agents':
+            d['agents'] = {**(d.get('agents') or {}), **(v or {})}
+        else:
+            d[k] = v
+
+    def absp(p):
+        if not p:
+            return p
+        p = os.path.expanduser(str(p))
+        if os.path.isabs(p):
+            return p
+        c = os.path.abspath(os.path.join(camp_dir, p))
+        return os.path.abspath(p) if (not os.path.exists(c) and os.path.exists(p)) else c
+
+    d['weights'] = absp(d.get('weights'))
+    d['agents'] = {k: absp(v) for k, v in (d.get('agents') or {}).items()}
+    camp['methods'] = [(f'DRL:{absp(m[4:])}' if str(m).startswith(('DRL:', 'drl:')) and str(m).endswith('.pt')
+                        else m) for m in camp['methods']]
+    for m in camp['methods']:
+        st = make_strategy(m, cfg)
+        if getattr(st, 'outputs', 'goal') == 'velocity':
+            if not st.weights:
+                sys.exit(f'{m}: falta el fichero de pesos (.pt); ver el bloque drl: de config/platform.yaml')
+            if not os.path.isfile(st.weights):
+                sys.exit(f'{m}: no existe {st.weights}')
+
+
 def _done(ep_dir):
     try:
         with open(os.path.join(ep_dir, 'meta.json')) as f:
@@ -113,6 +148,9 @@ def run_gazebo_job(job, camp, cfg, maps_dir, platform_path):
                 x=x, y=y, yaw=yaw, strategy=job['method'], seed=job['seed'], out_dir=os.path.abspath(job['ep_dir']),
                 start_id=job['start_id'], rep=job['rep'], loc_mode=job['loc_mode'],
                 platform=os.path.abspath(platform_path), **g.get('extra_args', {}))
+    st = make_strategy(job['method'], cfg)
+    if getattr(st, 'outputs', 'goal') == 'velocity':
+        args['drl_weights'] = st.weights     # el nodo no ve el bloque drl: de la campaña
     cmd = ['ros2', 'launch', g.get('launch_package', 'aslam_bench'), g.get('launch_file', 'episode.launch.py')]
     cmd += [f'{k}:={v}' for k, v in args.items()]
     timeout = cfg['episode']['t_max'] * 1.5 + g.get('startup_grace', 60) + 60
@@ -157,6 +195,7 @@ def main(argv=None):
     from ..core.config import DEFAULT_PLATFORM, resource_dir
     platform_path = a.platform or DEFAULT_PLATFORM
     cfg = load_platform(platform_path, camp.get('platform_overrides'))
+    resolve_drl(cfg, camp, os.path.dirname(os.path.abspath(a.campaign)))
     maps_dir = a.maps or resource_dir('maps')
     out_root = os.path.join(a.out, camp['name'])
     os.makedirs(out_root, exist_ok=True)
