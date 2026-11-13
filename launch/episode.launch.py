@@ -1,0 +1,83 @@
+"""Un episodio completo en Gazebo: simulación + SLAM + Nav2 + explorador + monitor.
+
+  ros2 launch aslam_bench episode.launch.py world:=rooms_small \
+      map_yaml:=$(ros2 pkg prefix aslam_bench)/share/aslam_bench/maps/rooms_small.yaml \
+      x:=1.5 y:=5.0 yaw:=0.0 strategy:=B1 seed:=1 out_dir:=/tmp/ep_test
+
+El episodio termina solo (el monitor sale y el launch se apaga). Argumentos para
+enchufar tus propios componentes:
+  sim_launch   launch de simulación (por defecto sim_tb4.launch.py)
+  slam_launch  launch de SLAM; vacío = slam_toolbox de turtlebot4_navigation.
+               Para tu Graph SLAM: un launch que publique /map y TF map->odom.
+  nav2_launch  launch de Nav2; vacío = turtlebot4_navigation/nav2.launch.py
+"""
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import (DeclareLaunchArgument, EmitEvent, IncludeLaunchDescription,
+                            RegisterEventHandler, TimerAction)
+from launch.conditions import IfCondition, UnlessCondition
+from launch.event_handlers import OnProcessExit
+from launch.events import Shutdown
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import EqualsSubstitution, LaunchConfiguration, PathJoinSubstitution
+from launch_ros.actions import Node
+
+
+def _arg(name, default):
+    return DeclareLaunchArgument(name, default_value=str(default))
+
+
+def generate_launch_description():
+    bench = get_package_share_directory('aslam_bench')
+    tb4_nav = get_package_share_directory('turtlebot4_navigation')
+    L = LaunchConfiguration
+    args = [_arg('world', 'rooms_small'),
+            DeclareLaunchArgument('map_yaml', default_value=PathJoinSubstitution(
+                [bench, 'maps', [LaunchConfiguration('world'), '.yaml']])), _arg('x', 1.5), _arg('y', 5.0),
+            _arg('yaw', 0.0), _arg('strategy', 'B1'), _arg('seed', 0), _arg('out_dir', '/tmp/aslam_bench_ep'),
+            _arg('start_id', 0), _arg('rep', 0), _arg('loc_mode', 'slam'), _arg('platform', ''),
+            _arg('t_max', 900.0), _arg('robot_model', 'turtlebot4'),
+            _arg('sim_launch', bench + '/launch/sim_tb4.launch.py'),
+            _arg('slam_launch', ''), _arg('nav2_launch', ''), _arg('explorer_delay', 15.0)]
+
+    sim = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(L('sim_launch')),
+        launch_arguments={'world': L('world'), 'x': L('x'), 'y': L('y'), 'yaw': L('yaw')}.items())
+
+    no_slam = EqualsSubstitution(L('slam_launch'), '')
+    slam_default = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(tb4_nav + '/launch/slam.launch.py'),
+        launch_arguments={'use_sim_time': 'true'}.items(), condition=IfCondition(no_slam))
+    slam_custom = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(L('slam_launch')),
+        launch_arguments={'use_sim_time': 'true'}.items(), condition=UnlessCondition(no_slam))
+
+    no_nav = EqualsSubstitution(L('nav2_launch'), '')
+    nav_default = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(tb4_nav + '/launch/nav2.launch.py'),
+        launch_arguments={'use_sim_time': 'true'}.items(), condition=IfCondition(no_nav))
+    nav_custom = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(L('nav2_launch')),
+        launch_arguments={'use_sim_time': 'true'}.items(), condition=UnlessCondition(no_nav))
+
+    # Pose real de todos los modelos dinámicos (la publica el SceneBroadcaster de gz)
+    gt_bridge = Node(package='ros_gz_bridge', executable='parameter_bridge', name='gt_bridge',
+                     arguments=[['/world/', L('world'), '/dynamic_pose/info@tf2_msgs/msg/TFMessage[gz.msgs.Pose_V']],
+                     remappings=[(['/world/', L('world'), '/dynamic_pose/info'], '/aslam_bench/gt_poses')],
+                     parameters=[{'use_sim_time': True}])
+
+    common = {'use_sim_time': True, 'platform': L('platform'), 'strategy': L('strategy')}
+    monitor = Node(package='aslam_bench', executable='episode_monitor', name='aslam_bench_monitor', output='screen',
+                   parameters=[common, {'out_dir': L('out_dir'), 'map_name': L('world'), 'map_yaml': L('map_yaml'),
+                                        'start_x': L('x'), 'start_y': L('y'), 'start_yaw': L('yaw'),
+                                        'start_id': L('start_id'), 'rep': L('rep'), 'seed': L('seed'),
+                                        'loc_mode': L('loc_mode'), 't_max': L('t_max'),
+                                        'robot_model': L('robot_model'), 'backend': 'gazebo'}])
+    explorer = Node(package='aslam_bench', executable='explorer', name='aslam_bench_explorer', output='screen',
+                    parameters=[common, {'seed': L('seed')}])
+
+    return LaunchDescription(args + [
+        sim, slam_default, slam_custom, nav_default, nav_custom, gt_bridge, monitor,
+        TimerAction(period=L('explorer_delay'), actions=[explorer]),
+        RegisterEventHandler(OnProcessExit(target_action=monitor, on_exit=[EmitEvent(event=Shutdown())])),
+    ])

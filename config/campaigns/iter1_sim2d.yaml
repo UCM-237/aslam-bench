@@ -1,0 +1,13 @@
+# Campaña de la iteración 1 en el simulador 2D (validación del pipeline y de B0/B1).
+name: iter1_sim2d
+backend: sim2d
+maps: [rooms_small, office_corridor, cluttered_hall]
+methods: [B0, B1]
+n_starts: 10            # poses iniciales por mapa (compartidas por todos los métodos)
+reps: 1                 # repeticiones por (mapa, pose, método)
+start_seed: 42
+start_clearance: 0.5    # m mínimos a obstáculos para una pose inicial
+loc_modes:
+  oracle:     {odom_noise: [0.0, 0.0]}     # pose perfecta: mide solo la decisión
+  odom_noise: {odom_noise: [0.03, 0.05]}   # deriva de odometría sin corrección (cota pesimista)
+platform_overrides: {}

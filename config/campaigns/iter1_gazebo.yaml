@@ -1,0 +1,17 @@
+# Campaña de la iteración 1 en Gazebo (TurtleBot 4 Lite simulado = Create 3 + RPLIDAR + OAK-D Lite).
+name: iter1_gazebo
+backend: gazebo
+maps: [rooms_small, office_corridor, cluttered_hall]
+methods: [B0, B1]
+n_starts: 5
+reps: 2
+start_seed: 42
+start_clearance: 0.5
+loc_modes:
+  slam: {}               # el SLAM real (slam_toolbox por defecto o tu Graph SLAM)
+gazebo:
+  launch_package: aslam_bench
+  launch_file: episode.launch.py
+  extra_args: {}         # p. ej. {slam_launch: /ruta/a/mi_graph_slam.launch.py}
+  startup_grace: 60      # s de margen para que arranquen Gazebo + Nav2
+platform_overrides: {}

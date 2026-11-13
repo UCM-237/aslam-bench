@@ -1,0 +1,7 @@
+# Solo para usar el simulador 2D y el análisis sin ROS (pip install -r requirements.txt)
+numpy
+scipy
+pandas
+matplotlib
+pyyaml
+pytest
