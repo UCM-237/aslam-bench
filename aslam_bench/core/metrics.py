@@ -201,7 +201,10 @@ def episode_metrics(ep_dir, gt: OccGrid, cfg):
         row['pos_err_max'] = float(err.max())
 
     # navegación / decisión
-    dec = pd.to_numeric(goals.loc[goals['event'] == 'goal', 'decision_time'], errors='coerce').dropna()
+    # 'goal': una decisión por objetivo (B0, B1...); 'policy': media de la inferencia por
+    # periodo de decisión de una política de velocidad (DRL)
+    dec = pd.to_numeric(goals.loc[goals['event'].isin(['goal', 'policy']), 'decision_time'],
+                        errors='coerce').dropna()
     row['n_goals'] = int((goals['event'] == 'goal').sum())
     row['decision_time_mean'] = float(dec.mean()) if len(dec) else float('nan')
     row['decision_time_p95'] = float(np.percentile(dec, 95)) if len(dec) else float('nan')

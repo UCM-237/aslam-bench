@@ -4,4 +4,7 @@ scipy
 pandas
 matplotlib
 pyyaml
+tabulate               # analyze: tablas markdown (pandas.to_markdown)
 pytest
+# Solo para el agente DRL (inferencia; basta la versión CPU):
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu

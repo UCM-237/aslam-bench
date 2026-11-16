@@ -18,7 +18,7 @@ aslam_bench/
 ├── launch/sim_tb4.launch.py        ← simulación por defecto (TurtleBot 4 Lite en gz sim)
 ├── aslam_bench/core/               ← sin ROS: rejillas, fronteras, estrategias, lógica, métricas, estadística
 ├── aslam_bench/sim2d/              ← simulador 2D
-├── aslam_bench/ros/                ← nodos explorer y episode_monitor
+├── aslam_bench/ros/                ← nodos explorer, drl_explorer y episode_monitor
 ├── aslam_bench/tools/              ← make_maps, map_to_world, run_campaign, analyze, plot_traj
 └── tests/                          ← pytest del núcleo
 ```
@@ -27,7 +27,7 @@ aslam_bench/
 
 ```bash
 pip install -r requirements.txt
-python -m pytest -q tests/                                     # 15 pruebas
+python -m pytest -q tests/                                     # 23 pruebas (2 necesitan torch)
 python -m aslam_bench.tools.run_campaign config/campaigns/iter1_sim2d.yaml --out results -j 4
 python -m aslam_bench.tools.analyze results/iter1_sim2d        # → results/iter1_sim2d/analysis/report.md
 python -m aslam_bench.tools.plot_traj results/iter1_sim2d --grid # → traj.png por episodio y analysis/fig_traj_*.png
@@ -132,20 +132,55 @@ En el robot real, sin ground truth, `gt_*` es NaN: se dibuja solo la trayectoria
 | Robustez | éxito (≥ 95 %), motivo de terminación, colisiones, objetivos fallidos o caducados |
 | Coste | tiempo de decisión (media, p95) |
 
-## 5. Añadir un método (B2…B5, tu DRL)
+## 5. Agente DRL (TD3 de c3-aslamdrl-platform, rama `drl`)
+
+El agente de `applications/drl_active_slam` está integrado como método **`DRL`**. A diferencia de B0/B1 **no elige objetivos: emite (v, ω) a 10 Hz**, así que no pasa por Nav2 (Gazebo) ni por `SimpleNavigator` (sim2d). La lógica común solo aplica el mismo criterio de fin que a los demás (sin fronteras alcanzables), además de cobertura, estancamiento y `t_max`.
+
+- `core/drl_policy.py`: la red `Actor` de `td3.py` (mismos nombres de parámetros) y la observación de `DRLEnvironment.get_state` (1656 valores: 500 haces LiDAR / 6 m, LEM y GEM de 24×24, acción previa, sin/cos del yaw). No importa `drl_active_slam` ni ROS. Solo hace inferencia y no añade ruido de exploración.
+- Adaptadores: cualquier LiDAR se remuestrea a los 500 haces del entrenamiento (0…2π desde el eje x del robot). El mapa se umbraliza a −1/0/100 (los valores exactos de slam_toolbox que espera la LEM) y la pose es la estimada en el marco `map`.
+- Acción: v = (a₀+1)/2·0,3 m/s y ω = a₁·1,9 rad/s, que son los límites del entrenamiento. Con `drl.clip_to_platform: true` (por defecto) se recorta a `platform.base` (0,26 m/s y 1,0 rad/s), igual que las baselines.
+- Colisiones: el episodio no termina; cada contacto se cuenta una vez.
+- `torch` solo hace falta para el DRL (`pip install torch --index-url https://download.pytorch.org/whl/cpu`).
+
+### Elegir el agente (.pt)
+
+Solo hace falta el `actor_stage{S}_episode{N}.pt` (el `state_dict` del actor). Cópialo, por ejemplo, a `models/` (ignorado por Git). Formas de elegirlo, de más a menos prioritaria:
+
+| Dónde | Ejemplo | Método en los resultados |
+|---|---|---|
+| `methods:` de la campaña con ruta | `DRL:models/actor_stage0_episode1000.pt` | `DRL_actor_stage0_episode1000` |
+| `methods:` con alias + `drl.agents` | `DRL:e1000` y `drl: {agents: {e1000: models/...pt}}` | `DRL_e1000` |
+| `drl.weights` (campaña o `platform.yaml`) | `DRL` | `DRL` |
+| Launch de Gazebo | `strategy:=DRL drl_weights:=/ruta/actor.pt` | `DRL` |
+| Variable de entorno | `ASLAM_BENCH_DRL_WEIGHTS=/ruta/actor.pt` | `DRL` |
+
+Varios alias en la misma campaña permiten comparar semillas o episodios de entrenamiento. `meta.json` guarda la ruta y el SHA-256 de los pesos usados.
+
+```bash
+python -m aslam_bench.tools.run_campaign config/campaigns/drl_sim2d.yaml --out results -j 4
+python -m aslam_bench.tools.analyze results/drl_sim2d
+# Gazebo (sin Nav2 para el DRL; en Jazzy añade cmd_vel_stamped:=true si el TB4 espera TwistStamped)
+ros2 launch aslam_bench episode.launch.py world:=rooms_small strategy:=DRL \
+    drl_weights:=$PWD/models/actor_stage0_episode1000.pt out_dir:=/tmp/ep_drl
+```
+
+### LiDAR: RPLIDAR C1
+
+`config/platform.yaml` describe ahora el **RPLIDAR C1** (500 haces, 10 Hz, 0,05–12 m), que es el del robot de c3-aslamdrl-platform y el que vio el agente al entrenar. El simulador 2D lo usa directamente. En Gazebo, el modelo del TurtleBot 4 trae su propio sensor (A1); el nodo DRL remuestrea lo que llegue, pero para simular de verdad el C1 hay que lanzar un modelo con ese sensor mediante `sim_launch`. Los resultados de la iteración 1 se obtuvieron con el A1M8 (360 haces, 5,5 Hz): para compararlos con B0/B1 hay que repetir esas baselines con el C1.
+
+### Salto de dominio (a tener en cuenta al interpretar)
+
+El agente se entrenó en Gazebo Classic, en una arena de 4,2×4,2 m, con episodios de 40 s y su propia función de éxito (GEM conocida > 95 %). Aquí se evalúa en mapas mayores y con episodios de hasta 900 s.
+
+## 6. Añadir otro método
 
 ```python
 # aslam_bench/core/strategies.py
-class MiDRL(Strategy):
-    name = 'DRL'
-    def __init__(self, cfg):
-        super().__init__(cfg)
-        self.policy = cargar_politica(...)
+class MiMetodo(Strategy):
+    name = 'B2_mi_metodo'
+    outputs = 'goal'            # o 'velocity' + act(ranges, angles, grid, pose) -> (v, w, info)
     def choose(self, ctx, rng, blacklist):
         # ctx.grid (OccGrid), ctx.robot_xy, ctx.frontiers (con distancia geodésica), ctx.dist, ctx.passable
-        x, y = self.policy(ctx)
-        return Goal(x, y, yaw=0.0, distance=float(ctx.dist[ctx.grid.world_to_cell(x, y)]))
-STRATEGIES['DRL'] = MiDRL
+        ...
+STRATEGIES['B2'] = MiMetodo
 ```
-
-Después basta con añadir `DRL` a `methods:` en la campaña. Si tu política genera velocidades en lugar de objetivos, el monitor y las métricas sirven igual. Solo hay que sustituir el nodo `explorer` por el tuyo y publicar los eventos en `/aslam_bench/explorer_events`.

@@ -9,6 +9,10 @@ Ciclo (llamar a `update` a `replan_period`):
   * Si la estrategia dice que el objetivo ya no tiene sentido (p. ej. la frontera
     se ha observado) -> se decide uno nuevo.
   * Si no quedan fronteras alcanzables -> DONE (criterio común para todos los métodos).
+
+Con una estrategia de velocidad (`outputs == 'velocity'`, p. ej. el DRL) no hay objetivos:
+`update` solo aplica el criterio común de fin (sin fronteras alcanzables) y el entorno
+pide las velocidades con `act()`.
 """
 from __future__ import annotations
 
@@ -33,9 +37,9 @@ class Action:
 
 
 class ExplorerLogic:
-    def __init__(self, strategy_name, cfg, seed=0):
+    def __init__(self, strategy_name, cfg, seed=0, **strategy_kw):
         self.cfg = cfg
-        self.strategy = make_strategy(strategy_name, cfg)
+        self.strategy = make_strategy(strategy_name, cfg, **strategy_kw)
         self.rng = np.random.default_rng(seed)
         self.goal: Goal | None = None
         self.goal_t0 = 0.0
@@ -53,9 +57,31 @@ class ExplorerLogic:
         v = self.cfg['platform']['base']['max_lin_vel']
         return max(ex['goal_timeout_min'], ex['goal_timeout_factor'] * goal.distance / v)
 
+    @property
+    def velocity_mode(self):
+        return getattr(self.strategy, 'outputs', 'goal') == 'velocity'
+
+    def _context(self, grid, robot_xy):
+        ex = self.cfg['exploration']
+        ctx = build_context(grid, robot_xy, robot_clearance(self.cfg), ex['min_frontier_size'],
+                            ex['min_unknown_cells'])
+        rad = ex['blacklist_radius']
+        tol = self.cfg['navigation']['goal_tolerance']
+        # fronteras abiertas: alcanzables, no vetadas y no 'ya alcanzadas' (dentro de la tolerancia)
+        ctx.frontiers = [f for f in ctx.frontiers if np.isfinite(f.distance) and f.distance > tol and not any(
+            (f.goal[0] - bx) ** 2 + (f.goal[1] - by) ** 2 < rad ** 2 for bx, by in self.blacklist)]
+        return ctx
+
     def update(self, t, grid, robot_xy, nav_status) -> Action:
         if self.done:
             return Action('none')
+        if self.velocity_mode:
+            ctx = self._context(grid, robot_xy)
+            info = dict(n_frontiers=len(ctx.frontiers))
+            if not ctx.frontiers:
+                self.done = True
+                return Action('done', info=info)
+            return Action('none', info=info)
         reason = None
         if self.goal is not None:
             if nav_status == NAV_FAILED:
@@ -83,14 +109,7 @@ class ExplorerLogic:
             self.goal = None
 
         t0 = time.perf_counter()
-        ex = self.cfg['exploration']
-        ctx = build_context(grid, robot_xy, robot_clearance(self.cfg), ex['min_frontier_size'],
-                            ex['min_unknown_cells'])
-        rad = ex['blacklist_radius']
-        tol = self.cfg['navigation']['goal_tolerance']
-        # fronteras abiertas: alcanzables, no vetadas y no 'ya alcanzadas' (dentro de la tolerancia)
-        ctx.frontiers = [f for f in ctx.frontiers if np.isfinite(f.distance) and f.distance > tol and not any(
-            (f.goal[0] - bx) ** 2 + (f.goal[1] - by) ** 2 < rad ** 2 for bx, by in self.blacklist)]
+        ctx = self._context(grid, robot_xy)
         open_frontiers = ctx.frontiers
         self.last_frontiers = open_frontiers
         goal = self.strategy.choose(ctx, self.rng, self.blacklist) if open_frontiers else None
