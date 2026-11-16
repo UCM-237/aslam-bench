@@ -19,7 +19,7 @@ aslam_bench/
 ├── aslam_bench/core/               ← sin ROS: rejillas, fronteras, estrategias, lógica, métricas, estadística
 ├── aslam_bench/sim2d/              ← simulador 2D
 ├── aslam_bench/ros/                ← nodos explorer y episode_monitor
-├── aslam_bench/tools/              ← make_maps, map_to_world, run_campaign, analyze
+├── aslam_bench/tools/              ← make_maps, map_to_world, run_campaign, analyze, plot_traj
 └── tests/                          ← pytest del núcleo
 ```
 
@@ -27,9 +27,10 @@ aslam_bench/
 
 ```bash
 pip install -r requirements.txt
-python -m pytest -q tests/                                     # 12 pruebas
+python -m pytest -q tests/                                     # 15 pruebas
 python -m aslam_bench.tools.run_campaign config/campaigns/iter1_sim2d.yaml --out results -j 4
 python -m aslam_bench.tools.analyze results/iter1_sim2d        # → results/iter1_sim2d/analysis/report.md
+python -m aslam_bench.tools.plot_traj results/iter1_sim2d --grid # → traj.png por episodio y analysis/fig_traj_*.png
 ```
 
 La campaña es reanudable: si se interrumpe, al relanzarla salta los episodios terminados. Las poses iniciales se muestrean una vez y se guardan en `starts.yaml`, y todos los métodos usan las mismas, porque el diseño es pareado.
@@ -50,6 +51,7 @@ ros2 launch aslam_bench episode.launch.py world:=rooms_small x:=1.5 y:=5.0 yaw:=
 # campaña completa en Gazebo (episodios en serie) y análisis
 ros2 run aslam_bench run_campaign $(ros2 pkg prefix aslam_bench)/share/aslam_bench/config/campaigns/iter1_gazebo.yaml --out results
 ros2 run aslam_bench analyze results/iter1_gazebo
+ros2 run aslam_bench plot_traj results/iter1_gazebo --grid
 ```
 
 Con tu propio Graph SLAM: `slam_launch:=/ruta/mi_slam.launch.py`. Debe publicar `/map` y la TF `map→odom`, y el marco `map` debe empezar en la pose inicial del robot. Con tu propia simulación del Create 3: `sim_launch:=...`, que debe aceptar `world x y yaw` y publicar `/scan`, `/tf` y `/clock`. Las dos opciones se pueden fijar en `gazebo.extra_args` del YAML de campaña.
@@ -71,6 +73,36 @@ Es el mismo para sim2d, Gazebo y el robot real (ver `core/recorder.py`):
 | `goals.csv` | objetivos enviados, tiempo de decisión, nº de fronteras, cómo terminó el objetivo anterior |
 | `events.csv` | colisiones, fallos de navegación |
 | `maps/*.npz` | instantáneas del mapa estimado cada 5 s |
+
+### Marcos de referencia
+
+- `gt_*` y la pose inicial (`start_pose` en `meta.json`) están en el marco del **mundo**, que es el del YAML del mapa (los mundos SDF se generan con `map_to_world` a partir de él, así que Gazebo usa las mismas coordenadas).
+- `est_*`, los objetivos de `goals.csv` y los mapas de `maps/*.npz` están en el marco **`map` del SLAM**, que empieza en la pose inicial del robot. Para pasarlos al mundo: `world = start_pose ⊕ map`, es decir, `se2_apply(start_pose, x, y)` de `core/grid.py`, y al yaw se le suma el de la pose inicial.
+- `events.csv` no guarda posición. `plot_traj` coloca cada colisión donde estaba el robot en ese instante, interpolando la trayectoria real (o la estimada si no hay ground truth).
+
+### Dibujar trayectorias (`plot_traj`)
+
+```bash
+# un episodio → <episodio>/traj.png
+python -m aslam_bench.tools.plot_traj results/iter1_sim2d/episodes/oracle/rooms_small/B1_nearest_frontier/s00_r0
+# una campaña entera, más una figura por (modo, mapa) con filas = pose inicial y columnas = método
+python -m aslam_bench.tools.plot_traj results/iter1_sim2d --grid
+# solo la comparativa de un mapa, con el último mapa estimado superpuesto, en otra carpeta
+python -m aslam_bench.tools.plot_traj results/iter1_sim2d --grid --no-episodes --map rooms_small --est-map --out figs/
+```
+
+Cada figura dibuja sobre el mapa real la trayectoria real (azul), la estimada por el SLAM ya pasada al mundo (naranja discontinua), los objetivos (×), las colisiones (○), el inicio con su orientación y el final. En el título aparecen método, mapa, episodio, modo de localización, motivo de terminación, duración y ATE. Con `--est-map` se añaden las celdas ocupadas del último mapa estimado, también pasadas al mundo; si la localización deriva, se ven las paredes desplazadas respecto al mapa real.
+
+| Opción | Efecto |
+|---|---|
+| `--maps DIR` | directorio de mapas (por defecto `maps/` del paquete). Si no encuentra el mapa del episodio, dibuja sin fondo |
+| `--out DIR` | guarda todas las figuras ahí (`<modo>__<mapa>__<método>__<episodio>.png`) en lugar de `traj.png` en cada episodio |
+| `--grid` | figura comparativa `fig_traj_<modo>_<mapa>.png` en `<campaña>/analysis/` (o en `--out`) |
+| `--no-episodes` | no genera las figuras individuales |
+| `--est-map` | superpone el último mapa estimado |
+| `--map`, `--method`, `--loc-mode` | filtros (se pueden repetir) |
+
+En el robot real, sin ground truth, `gt_*` es NaN: se dibuja solo la trayectoria estimada.
 
 ## 4. Métricas por episodio (`core/metrics.py`)
 
