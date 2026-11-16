@@ -8,7 +8,9 @@ Para cada episodio dibuja, en el marco del mundo (el del YAML del mapa):
   * el mapa real (PGM + YAML de `--maps`, según `map` de meta.json),
   * la trayectoria real (gt_*) y la estimada por el SLAM (est_*), que se pasa del
     marco 'map' al mundo con la pose inicial de meta.json: world = start_pose ⊕ map,
-  * los objetivos de goals.csv (están en el marco 'map', igual que la estimación),
+  * los objetivos de goals.csv (están en el marco 'map', igual que la estimación), con
+    otro símbolo los de revisita / cierre de bucle (B4, B5, B8) y los semánticos (B8),
+  * los objetos semánticos de sim2d (semantic.json): confirmados, vistos o no vistos,
   * las colisiones de events.csv, situadas donde estaba el robot en ese instante,
   * opcionalmente (`--est-map`) las celdas ocupadas del último mapa estimado.
 
@@ -37,6 +39,9 @@ from ..core.grid import OccGrid, load_map_yaml, se2_apply, wrap_angle  # noqa: E
 
 # Mismos colores que analyze (paleta categórica validada)
 C_GT, C_EST, C_GOAL, C_COLL, C_EMAP = '#2a78d6', '#eb6834', '#1baf7a', '#e34948', '#6250d6'
+C_LC, C_SEM = '#d6a01b', '#c03b9e'          # objetivos de cierre de bucle y semánticos
+GOAL_STYLE = {'loop_closure': ('D', C_LC, 'revisita / cierre de bucle'),
+              'semantic': ('^', C_SEM, 'punto de vista semántico')}
 INK, INK2 = '#0b0b0b', '#52514e'
 MAP_CMAP = ListedColormap(['#d9d8d4', '#fcfcfb', '#3d3c3a'])   # desconocido, libre, ocupado
 
@@ -85,6 +90,17 @@ def load_trajectory(ep_dir):
     g = goals[goals['event'] == 'goal'].dropna(subset=['x', 'y'])
     gx, gy = se2_apply(start, g['x'].to_numpy(float), g['y'].to_numpy(float))
     goals_w = np.column_stack([gx, gy]) if len(g) else np.zeros((0, 2))
+    kinds = []
+    for v in (g['info'] if 'info' in g else [None] * len(g)):
+        try:
+            kinds.append(json.loads(v).get('kind', 'frontier') if isinstance(v, str) and v else 'frontier')
+        except ValueError:
+            kinds.append('frontier')
+    sem = None
+    sp = os.path.join(ep_dir, 'semantic.json')
+    if os.path.isfile(sp):
+        with open(sp) as f:
+            sem = json.load(f)
 
     # colisiones: posición del robot en ese instante (real si hay ground truth, si no la estimada)
     tc = events.loc[events['kind'] == 'collision', 't'].dropna().to_numpy(float)
@@ -95,7 +111,8 @@ def load_trajectory(ep_dir):
         coll = np.zeros((0, 2))
 
     snaps = sorted(glob.glob(os.path.join(ep_dir, 'maps', '*.npz')))
-    return dict(meta=meta, start=start, t=t, gt=gt, est=est, goals=goals_w, collisions=coll,
+    return dict(meta=meta, start=start, t=t, gt=gt, est=est, goals=goals_w, goal_kinds=np.array(kinds),
+                semantic=sem, collisions=coll,
                 last_map=snaps[-1] if snaps else None, dir=ep_dir)
 
 
@@ -154,8 +171,27 @@ def draw_episode(ax, tr, gt_map=None, est_map=False, lw=1.6, title=True):
         ax.plot(gt[:, 0], gt[:, 1], color=C_GT, lw=lw, zorder=3, solid_capstyle='round')
     if len(est):
         ax.plot(est[:, 0], est[:, 1], color=C_EST, lw=lw * 0.8, ls=(0, (3, 2)), zorder=4)
+    sem = tr.get('semantic')
+    if sem and sem.get('objects'):
+        state = {lm['id']: lm['state'] for lm in sem.get('landmarks', [])}
+        for st, fc, ec in (('confirmed', C_SEM, C_SEM), ('tentative', 'none', C_SEM), (None, 'none', INK2)):
+            pts = [(o['x'], o['y']) for o in sem['objects'] if state.get(o['id']) == st]
+            if pts:
+                pts = np.asarray(pts)
+                ax.scatter(pts[:, 0], pts[:, 1], marker='s', s=16, facecolors=fc, edgecolors=ec,
+                           linewidths=1.0, zorder=2, alpha=0.9)
     if len(tr['goals']):
-        ax.scatter(tr['goals'][:, 0], tr['goals'][:, 1], marker='x', s=22, c=C_GOAL, linewidths=1.4, zorder=5)
+        kinds = tr.get('goal_kinds')
+        if kinds is None or len(kinds) != len(tr['goals']):
+            kinds = np.array(['frontier'] * len(tr['goals']))
+        plain = ~np.isin(kinds, list(GOAL_STYLE))
+        ax.scatter(tr['goals'][plain, 0], tr['goals'][plain, 1], marker='x', s=22, c=C_GOAL, linewidths=1.4,
+                   zorder=5)
+        for k, (mk, col, _) in GOAL_STYLE.items():
+            sel = kinds == k
+            if sel.any():
+                ax.scatter(tr['goals'][sel, 0], tr['goals'][sel, 1], marker=mk, s=26, facecolors='none',
+                           edgecolors=col, linewidths=1.4, zorder=5)
     if len(tr['collisions']):
         ax.scatter(tr['collisions'][:, 0], tr['collisions'][:, 1], marker='o', s=30, facecolors='none',
                    edgecolors=C_COLL, linewidths=1.4, zorder=7)
@@ -187,6 +223,11 @@ def legend_handles(est_map=False):
          Line2D([], [], color=C_COLL, marker='o', mfc='none', ls='', label='colisiones'),
          Line2D([], [], color=INK, marker='o', ls='', ms=4, label='inicio'),
          Line2D([], [], color=INK, marker='s', ls='', ms=4, label='fin')]
+    h += [Line2D([], [], color=col, marker=mk, mfc='none', ls='', label=lab)
+          for mk, col, lab in GOAL_STYLE.values()]
+    h += [Line2D([], [], color=C_SEM, marker='s', ls='', ms=4, label='objeto confirmado (sim2d)'),
+          Line2D([], [], color=C_SEM, marker='s', mfc='none', ls='', ms=4, label='objeto visto, sin confirmar'),
+          Line2D([], [], color=INK2, marker='s', mfc='none', ls='', ms=4, label='objeto no visto')]
     if est_map:
         h.append(Line2D([], [], color=C_EMAP, marker='s', ls='', ms=3, label='mapa estimado (ocupado)'))
     return h

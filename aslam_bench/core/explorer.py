@@ -23,6 +23,8 @@ import numpy as np
 
 from .config import robot_clearance
 from .frontiers import build_context
+from .posegraph import PoseGraph
+from .semantics import SemanticMap
 from .strategies import Goal, make_strategy
 
 # Estados de navegación que el entorno (Nav2 o el simulador) comunica a la lógica
@@ -51,6 +53,9 @@ class ExplorerLogic:
         self.n_replans = 0
         self.done = False
         self.last_frontiers = []        # fronteras abiertas de la última decisión (para visualizar)
+        # grafo de poses sustituto (B4, B5, B8) y mapa semántico (B8; el entorno lo alimenta)
+        self.pose_graph = PoseGraph.from_cfg(cfg) if getattr(self.strategy, 'uses_pose_graph', False) else None
+        self.semantic = SemanticMap.from_cfg(cfg)
 
     def _timeout_for(self, goal: Goal):
         ex = self.cfg['exploration']
@@ -61,10 +66,11 @@ class ExplorerLogic:
     def velocity_mode(self):
         return getattr(self.strategy, 'outputs', 'goal') == 'velocity'
 
-    def _context(self, grid, robot_xy):
+    def _context(self, grid, robot_xy, yaw=0.0):
         ex = self.cfg['exploration']
         ctx = build_context(grid, robot_xy, robot_clearance(self.cfg), ex['min_frontier_size'],
                             ex['min_unknown_cells'])
+        ctx.robot_yaw, ctx.pose_graph, ctx.semantic = yaw, self.pose_graph, self.semantic
         rad = ex['blacklist_radius']
         tol = self.cfg['navigation']['goal_tolerance']
         # fronteras abiertas: alcanzables, no vetadas y no 'ya alcanzadas' (dentro de la tolerancia)
@@ -73,8 +79,15 @@ class ExplorerLogic:
         return ctx
 
     def update(self, t, grid, robot_xy, nav_status) -> Action:
+        """`robot_xy` puede ser (x, y) o la pose (x, y, yaw) en el marco 'map'."""
         if self.done:
             return Action('none')
+        yaw = float(robot_xy[2]) if len(robot_xy) > 2 else 0.0
+        pose = (float(robot_xy[0]), float(robot_xy[1]), yaw)
+        robot_xy = pose[:2]
+        if self.pose_graph is not None:
+            self.pose_graph.update(robot_xy, grid)
+        self.strategy.observe(t, grid, pose)
         if self.velocity_mode:
             ctx = self._context(grid, robot_xy)
             info = dict(n_frontiers=len(ctx.frontiers))
@@ -92,7 +105,9 @@ class ExplorerLogic:
                 reason = 'reached'
                 # Llegó y la frontera sigue ahí -> no es observable (interior de un mueble,
                 # artefacto del mapeo...): se veta para no volver en bucle.
-                if self.strategy.still_valid(grid, self.goal) and self.strategy.uses_frontier_validity:
+                if self.strategy.uses_frontier_validity and \
+                        self.goal.info.get('kind', 'frontier') == 'frontier' and \
+                        self.strategy.still_valid(grid, self.goal):
                     self.blacklist.append((self.goal.x, self.goal.y))
                     reason = 'reached_unobservable'
             elif nav_status == NAV_IDLE:
@@ -109,7 +124,7 @@ class ExplorerLogic:
             self.goal = None
 
         t0 = time.perf_counter()
-        ctx = self._context(grid, robot_xy)
+        ctx = self._context(grid, robot_xy, yaw)
         open_frontiers = ctx.frontiers
         self.last_frontiers = open_frontiers
         goal = self.strategy.choose(ctx, self.rng, self.blacklist) if open_frontiers else None
@@ -124,5 +139,9 @@ class ExplorerLogic:
         return Action('goal', goal, info)
 
     def stats(self):
-        return dict(n_goals=self.n_goals, n_goals_failed=self.n_failed,
-                    n_goals_timeout=self.n_timeouts, n_goals_invalidated=self.n_replans)
+        d = dict(n_goals=self.n_goals, n_goals_failed=self.n_failed,
+                 n_goals_timeout=self.n_timeouts, n_goals_invalidated=self.n_replans)
+        if self.pose_graph is not None:
+            d.update(pg_n_keyframes=len(self.pose_graph.nodes),
+                     pg_n_loop_closures=self.pose_graph.n_loop_closures())
+        return d
