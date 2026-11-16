@@ -407,7 +407,8 @@ class PoseUncertaintyIG(_GraphUtility):
       * ΔH_pose : H(pose actual) − H(pose al llegar), en bits; la pose se predice recorriendo
                   el camino sobre el grafo sustituto (`PoseGraph`): explorar la hace crecer
                   (ΔH < 0) y volver a un keyframe antiguo la reduce si cierra un bucle (ΔH > 0).
-    Acciones: fronteras (exploración) y keyframes antiguos (cierre de bucle), como en el original.
+    Acciones: fronteras (exploración) y keyframes antiguos (cierre de bucle), como en el original;
+    un keyframe solo cuenta como acción si el camino hasta él cierra algún bucle en el grafo.
     """
     name = 'B4_pose_uncertainty_ig'
     key = 'B4'
@@ -420,6 +421,8 @@ class PoseUncertaintyIG(_GraphUtility):
         for g in self.candidates(ctx, blacklist):
             ig = visible_entropy(ctx.grid, g.x, g.y, self.common['ig_radius'], self.common['ig_rays'])
             pr = self.predict(ctx, g)
+            if g.info['kind'] == 'loop_closure' and pr['n_lc'] == 0:
+                continue          # revisitar sin cerrar un bucle no es una acción de cierre
             dh = math.log2(max(var0, 1e-9) / pr['var']) if var0 > 0 else 0.0
             u = ig + self.p['w_pose'] * dh - self.p['lambda_cost'] * g.distance
             if u > bu:
@@ -447,6 +450,8 @@ class DOptGraphSLAM(_GraphUtility):
         for g in self.candidates(ctx, blacklist):
             ig = self.ig(ctx.grid, g.x, g.y)
             pr = self.predict(ctx, g)
+            if g.info['kind'] == 'loop_closure' and pr['n_lc'] == 0:
+                continue          # revisitar sin cerrar un bucle no es una acción de cierre
             u = ig + self.p['w_dopt'] * pr['dopt_gain'] - self.p['lambda_cost'] * g.distance
             if u > bu:
                 g.info.update(ig=ig, dopt_gain=pr['dopt_gain'], n_lc=pr['n_lc'], utility=u)
