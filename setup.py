@@ -35,6 +35,7 @@ setup(
             'episode_monitor = aslam_bench.ros.episode_monitor_node:main',
             'run_campaign = aslam_bench.tools.run_campaign:main',
             'analyze = aslam_bench.tools.analyze:main',
+            'plot_traj = aslam_bench.tools.plot_traj:main',
             'make_maps = aslam_bench.tools.make_maps:main',
             'map_to_world = aslam_bench.tools.map_to_world:main',
         ],
