@@ -56,6 +56,24 @@ ros2 run aslam_bench plot_traj results/iter1_gazebo --grid
 
 Con tu propio Graph SLAM: `slam_launch:=/ruta/mi_slam.launch.py`. Debe publicar `/map` y la TF `map→odom`, y el marco `map` debe empezar en la pose inicial del robot. Con tu propia simulación del Create 3: `sim_launch:=...`, que debe aceptar `world x y yaw` y publicar `/scan`, `/tf` y `/clock`. Las dos opciones se pueden fijar en `gazebo.extra_args` del YAML de campaña.
 
+### Ver un episodio en tiempo real
+
+Por defecto todo arranca sin ventanas (lo que interesa en una campaña). Para un episodio suelto:
+
+```bash
+# Gazebo con interfaz gráfica + RViz
+ros2 launch aslam_bench episode.launch.py world:=rooms_small x:=1.5 y:=5.0 yaw:=0.0 \
+    strategy:=B1 seed:=1 out_dir:=/tmp/ep1 headless:=false rviz:=true
+```
+
+- `headless:=false` abre la GUI de Gazebo (el mundo y el robot moviéndose).
+- `rviz:=true` abre RViz con `config/aslam_bench.rviz`: marco fijo `map`, el mapa de SLAM (`/map`), el scan (`/scan`), el robot y las TF, el plan de Nav2 (`/plan`) y los marcadores del explorador en `/aslam_bench/markers` (celdas frontera en naranja, objetivos candidatos en azul y el objetivo elegido como flecha verde). El costmap global está incluido pero desactivado; se activa en el panel *Displays*. Con `rviz_config:=/ruta/mia.rviz` se usa otra configuración.
+- Se pueden usar por separado: `rviz:=true` solo (con Gazebo sin ventana) es lo más ligero y suele bastar para seguir la exploración.
+
+Para verlo durante una campaña, añádelos en el YAML: `gazebo.extra_args: {headless: false, rviz: true}`. Se abrirá y cerrará una ventana por episodio, así que conviene solo para depurar con pocos episodios. Mostrar la GUI consume CPU/GPU y puede ralentizar la simulación respecto a las campañas sin ventanas, así que no mezcles resultados de ambos modos.
+
+Si ya tienes una sesión en marcha, también puedes abrir RViz aparte: `rviz2 -d $(ros2 pkg prefix aslam_bench)/share/aslam_bench/config/aslam_bench.rviz --ros-args -p use_sim_time:=true`.
+
 **Comprobaciones al primer arranque:**
 1. `ros2 topic echo /aslam_bench/gt_poses --once` debe contener un `child_frame_id` igual a `robot_model` (por defecto `turtlebot4`). Si no aparece, mira el nombre real con `gz topic -e -t /world/rooms_small/dynamic_pose/info` y pásalo como `robot_model:=`.
 2. El mundo carga (`GZ_SIM_RESOURCE_PATH` incluye `share/aslam_bench/worlds`) y el robot aparece en la pose pedida.

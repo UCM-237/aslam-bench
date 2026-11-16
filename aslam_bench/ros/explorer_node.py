@@ -3,6 +3,7 @@
 Suscripciones : /map (nav_msgs/OccupancyGrid), TF map -> base_link
 Acción        : navigate_to_pose (nav2_msgs/action/NavigateToPose)
 Publica       : /aslam_bench/explorer_events (std_msgs/String, JSON) para el monitor
+                /aslam_bench/markers (visualization_msgs/MarkerArray) fronteras y objetivo, para RViz
 
 Parámetros: strategy (B0|B1|...), seed, platform (ruta a platform.yaml),
             map_topic, global_frame, robot_frame, nav_action.
@@ -13,20 +14,22 @@ import json
 
 import rclpy
 from action_msgs.msg import GoalStatus
-from geometry_msgs.msg import PoseStamped
+from geometry_msgs.msg import Point, PoseStamped
 from nav2_msgs.action import NavigateToPose
 from nav_msgs.msg import OccupancyGrid
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-from std_msgs.msg import String
+from std_msgs.msg import ColorRGBA, String
 from tf2_ros import Buffer, TransformListener
+from visualization_msgs.msg import Marker, MarkerArray
 
 from ..core.config import load_platform
 from ..core.explorer import NAV_ACTIVE, NAV_FAILED, NAV_IDLE, NAV_SUCCEEDED, ExplorerLogic
 from .common import grid_from_msg, lookup_pose2d, quat_from_yaw
 
 EVENTS_TOPIC = '/aslam_bench/explorer_events'
+MARKERS_TOPIC = '/aslam_bench/markers'
 
 
 class ExplorerNode(Node):
@@ -52,6 +55,7 @@ class ExplorerNode(Node):
                          reliability=ReliabilityPolicy.RELIABLE)
         self.create_subscription(OccupancyGrid, self.map_topic, self._on_map, qos)
         self.events = self.create_publisher(String, EVENTS_TOPIC, 10)
+        self.markers = self.create_publisher(MarkerArray, MARKERS_TOPIC, qos)
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.nav = ActionClient(self, NavigateToPose, nav_action)
@@ -88,10 +92,46 @@ class ExplorerNode(Node):
         if act.kind == 'goal':
             self._send_goal(act.goal)
             self._publish('goal', act.goal, act.info)
+            self._publish_markers(act.goal)
         elif act.kind == 'done':
+            self._publish_markers(None)
             self._cancel()
             self._publish('done', None, act.info)
             self.get_logger().info('Sin fronteras alcanzables: exploración terminada')
+
+    # ------------------------------------------------------------------ RViz
+    def _publish_markers(self, goal):
+        """Fronteras abiertas (puntos naranja = celdas, esferas azules = objetivos candidatos)
+        y objetivo elegido (flecha verde). Solo para visualizar; no afecta a las métricas."""
+        stamp = self.get_clock().now().to_msg()
+
+        def marker(mid, mtype, scale, rgba):
+            m = Marker()
+            m.header.frame_id, m.header.stamp = self.global_frame, stamp
+            m.ns, m.id, m.type, m.action = 'aslam_bench', mid, mtype, Marker.ADD
+            m.pose.orientation.w = 1.0
+            m.scale.x, m.scale.y, m.scale.z = scale
+            m.color = ColorRGBA(r=rgba[0], g=rgba[1], b=rgba[2], a=rgba[3])
+            return m
+
+        def pt(x, y, z=0.05):
+            return Point(x=float(x), y=float(y), z=float(z))
+
+        res, (ox, oy) = self.grid.resolution, self.grid.origin
+        cells = marker(0, Marker.POINTS, (res, res, 0.0), (1.0, 0.5, 0.0, 0.9))
+        cands = marker(1, Marker.SPHERE_LIST, (0.15, 0.15, 0.15), (0.2, 0.4, 1.0, 0.8))
+        for f in self.logic.last_frontiers:
+            cells.points += [pt(ox + (j + 0.5) * res, oy + (i + 0.5) * res) for i, j in f.cells]
+            cands.points.append(pt(*f.goal))
+        arrow = marker(2, Marker.ARROW, (0.5, 0.08, 0.08), (0.1, 0.9, 0.1, 1.0))
+        if goal is None:
+            arrow.action = Marker.DELETE
+        else:
+            arrow.pose.position = pt(goal.x, goal.y, 0.1)
+            qx, qy, qz, qw = quat_from_yaw(goal.yaw)
+            arrow.pose.orientation.x, arrow.pose.orientation.y = qx, qy
+            arrow.pose.orientation.z, arrow.pose.orientation.w = qz, qw
+        self.markers.publish(MarkerArray(markers=[cells, cands, arrow]))
 
     # ------------------------------------------------------------------ Nav2
     def _cancel(self):

@@ -10,6 +10,11 @@ enchufar tus propios componentes:
   slam_launch  launch de SLAM; vacío = slam_toolbox de turtlebot4_navigation.
                Para tu Graph SLAM: un launch que publique /map y TF map->odom.
   nav2_launch  launch de Nav2; vacío = turtlebot4_navigation/nav2.launch.py
+
+Para verlo en tiempo real (por defecto todo va sin ventanas, como en las campañas):
+  headless     false = abre la GUI de Gazebo (por defecto true)
+  rviz         true = abre RViz con mapa, scan, robot, plan de Nav2, fronteras y objetivo
+  rviz_config  fichero .rviz (por defecto config/aslam_bench.rviz)
 """
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -38,11 +43,14 @@ def generate_launch_description():
             _arg('start_id', 0), _arg('rep', 0), _arg('loc_mode', 'slam'), _arg('platform', ''),
             _arg('t_max', 900.0), _arg('robot_model', 'turtlebot4'),
             _arg('sim_launch', bench + '/launch/sim_tb4.launch.py'),
-            _arg('slam_launch', ''), _arg('nav2_launch', ''), _arg('explorer_delay', 15.0)]
+            _arg('slam_launch', ''), _arg('nav2_launch', ''), _arg('explorer_delay', 15.0),
+            _arg('headless', 'true'), _arg('rviz', 'false'),
+            _arg('rviz_config', bench + '/config/aslam_bench.rviz')]
 
     sim = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(L('sim_launch')),
-        launch_arguments={'world': L('world'), 'x': L('x'), 'y': L('y'), 'yaw': L('yaw')}.items())
+        launch_arguments={'world': L('world'), 'x': L('x'), 'y': L('y'), 'yaw': L('yaw'),
+                          'headless': L('headless')}.items())
 
     no_slam = EqualsSubstitution(L('slam_launch'), '')
     slam_default = IncludeLaunchDescription(
@@ -76,8 +84,12 @@ def generate_launch_description():
     explorer = Node(package='aslam_bench', executable='explorer', name='aslam_bench_explorer', output='screen',
                     parameters=[common, {'seed': L('seed')}])
 
+    rviz = Node(package='rviz2', executable='rviz2', name='rviz2', output='log',
+                arguments=['-d', L('rviz_config')], parameters=[{'use_sim_time': True}],
+                condition=IfCondition(L('rviz')))
+
     return LaunchDescription(args + [
-        sim, slam_default, slam_custom, nav_default, nav_custom, gt_bridge, monitor,
+        sim, slam_default, slam_custom, nav_default, nav_custom, gt_bridge, monitor, rviz,
         TimerAction(period=L('explorer_delay'), actions=[explorer]),
         RegisterEventHandler(OnProcessExit(target_action=monitor, on_exit=[EmitEvent(event=Shutdown())])),
     ])

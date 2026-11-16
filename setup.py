@@ -18,7 +18,7 @@ setup(
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         ('share/' + package_name + '/launch', files('launch/*.py')),
-        ('share/' + package_name + '/config', files('config/*.yaml')),
+        ('share/' + package_name + '/config', files('config/*.yaml') + files('config/*.rviz')),
         ('share/' + package_name + '/config/campaigns', files('config/campaigns/*.yaml')),
         ('share/' + package_name + '/maps', files('maps/*')),
         ('share/' + package_name + '/worlds', files('worlds/*')),
