@@ -46,6 +46,7 @@ class ExplorerLogic:
         self.n_timeouts = 0
         self.n_replans = 0
         self.done = False
+        self.last_frontiers = []        # fronteras abiertas de la última decisión (para visualizar)
 
     def _timeout_for(self, goal: Goal):
         ex = self.cfg['exploration']
@@ -91,6 +92,7 @@ class ExplorerLogic:
         ctx.frontiers = [f for f in ctx.frontiers if np.isfinite(f.distance) and f.distance > tol and not any(
             (f.goal[0] - bx) ** 2 + (f.goal[1] - by) ** 2 < rad ** 2 for bx, by in self.blacklist)]
         open_frontiers = ctx.frontiers
+        self.last_frontiers = open_frontiers
         goal = self.strategy.choose(ctx, self.rng, self.blacklist) if open_frontiers else None
         dt = time.perf_counter() - t0
         info = dict(decision_time=dt, n_frontiers=len(open_frontiers), prev_goal_end=reason)

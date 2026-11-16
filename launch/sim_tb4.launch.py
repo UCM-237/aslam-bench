@@ -7,7 +7,8 @@ Probado solo en papel (no había ROS en el entorno de desarrollo). Supone ROS 2 
 turtlebot4_simulator (paquete turtlebot4_gz_bringup). En Humble el paquete se llama
 turtlebot4_ignition_bringup: cambia `spawn_pkg` abajo. Si ya tienes tu propia
 simulación del Create 3, sustituye este fichero con el argumento `sim_launch` de
-episode.launch.py: solo tiene que aceptar world, x, y, yaw y publicar /scan, /tf y /clock.
+episode.launch.py: solo tiene que aceptar world, x, y, yaw (y opcionalmente headless) y
+publicar /scan, /tf y /clock.
 """
 import os
 
