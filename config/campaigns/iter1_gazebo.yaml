@@ -13,5 +13,6 @@ gazebo:
   launch_package: aslam_bench
   launch_file: episode.launch.py
   extra_args: {}         # p. ej. {slam_launch: /ruta/a/mi_graph_slam.launch.py}
+                         # para depurar viéndolo: {headless: false, rviz: true}
   startup_grace: 60      # s de margen para que arranquen Gazebo + Nav2
 platform_overrides: {}

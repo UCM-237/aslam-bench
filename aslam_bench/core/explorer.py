@@ -50,6 +50,7 @@ class ExplorerLogic:
         self.n_timeouts = 0
         self.n_replans = 0
         self.done = False
+        self.last_frontiers = []        # fronteras abiertas de la última decisión (para visualizar)
 
     def _timeout_for(self, goal: Goal):
         ex = self.cfg['exploration']
@@ -110,6 +111,7 @@ class ExplorerLogic:
         t0 = time.perf_counter()
         ctx = self._context(grid, robot_xy)
         open_frontiers = ctx.frontiers
+        self.last_frontiers = open_frontiers
         goal = self.strategy.choose(ctx, self.rng, self.blacklist) if open_frontiers else None
         dt = time.perf_counter() - t0
         info = dict(decision_time=dt, n_frontiers=len(open_frontiers), prev_goal_end=reason)
