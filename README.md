@@ -3,7 +3,7 @@
 Paquete ROS 2 (ament_python) y herramientas Python para comparar métodos de exploración activa / Active SLAM en un **iRobot Create 3 con LiDAR 2D**. El objetivo final es comparar un método DRL con baselines clásicos. Es la **iteración 1** del [plan de evaluación](docs/plan_evaluacion_drl_vs_aslam.md):
 
 - Plataforma de referencia definida: [`docs/plataforma_referencia.md`](docs/plataforma_referencia.md) y [`config/platform.yaml`](config/platform.yaml). La cámara está en el modelo, pero ningún método la usa todavía.
-- Baselines **B0** (objetivo aleatorio, cota inferior) y **B1** (frontera más cercana, Yamauchi 1997).
+- Baselines **B0** (objetivo aleatorio, cota inferior) y **B1** (frontera más cercana, Yamauchi 1997), y **B2–B8** del plan (§7 de este README).
 - Entorno para lanzar episodios, registrar datos y calcular métricas, con dos backends que escriben el mismo formato:
   - **sim2d**: simulador 2D propio, rápido y sin ROS. Sirve para validar el pipeline y prototipar (unos 15 s por episodio).
   - **gazebo**: ROS 2 + Gazebo + TurtleBot 4 Lite simulado + SLAM + Nav2.
@@ -88,7 +88,8 @@ Es el mismo para sim2d, Gazebo y el robot real (ver `core/recorder.py`):
 |---|---|
 | `meta.json` | método, mapa, pose inicial (mundo), semilla, modo de localización, terminación, duración |
 | `poses.csv` | `t, gt_x, gt_y, gt_yaw` (mundo) y `est_x, est_y, est_yaw` (marco del SLAM) |
-| `goals.csv` | objetivos enviados, tiempo de decisión, nº de fronteras, cómo terminó el objetivo anterior |
+| `goals.csv` | objetivos enviados, tiempo de decisión, nº de fronteras, cómo terminó el objetivo anterior y, en `info` (JSON), los términos de la decisión: tipo de objetivo (`frontier`, `loop_closure`, `semantic`, `nbv`), IG, utilidad... |
+| `semantic.json` | solo sim2d: objetos simulados (mundo) y landmarks finales (marco `map`) |
 | `events.csv` | colisiones, fallos de navegación |
 | `maps/*.npz` | instantáneas del mapa estimado cada 5 s |
 
@@ -184,3 +185,25 @@ class MiMetodo(Strategy):
         ...
 STRATEGIES['B2'] = MiMetodo
 ```
+
+`ctx` también trae `ctx.tree` / `ctx.path_xy(celda)` (caminos mínimos desde el robot), `ctx.goal_near(x, y, r)`, `ctx.robot_yaw`, `ctx.pose_graph` (si la clase declara `uses_pose_graph = True`) y `ctx.semantic`. Los parámetros van en `strategies.<clave>` de `config/platform.yaml` (atributos `key` y `defaults` de la clase).
+
+## 7. Baselines B2–B8
+
+Todas son estrategias de **objetivo** (las ejecuta Nav2 en Gazebo y `SimpleNavigator` en sim2d), comparten la estimación de IG de `core/infogain.py` (área desconocida visible por trazado de rayos hasta `strategies.ig_radius`) y el criterio común de fin (sin fronteras alcanzables). En `methods:` se usan como `B2` … `B8`.
+
+| ID | Clase | Qué hace | Diferencias con el original |
+|---|---|---|---|
+| **B2** | `FrontierUtility` | Frontera de máxima `U = IG − λ·d` (IG en m², d geodésica) | — |
+| **B3** | `RRTExploration` | RRT global (persistente) y local (se reinicia) crecen cada ciclo; las aristas que entran en lo desconocido dan puntos frontera; filtro + agrupamiento; asignador `revenue = 3·IG(disco 1 m)·histéresis − coste` | Coste geodésico (el original usa euclídeo); agrupamiento voraz en vez de mean-shift; si aún no hay puntos útiles, frontera más cercana |
+| **B4** | `PoseUncertaintyIG` | `U = IG_mapa(bits) + w_pose·ΔH_pose − λ·d`; candidatos = fronteras + keyframes antiguos (cerrar bucle); ΔH_pose con la varianza predicha en el grafo de poses | Grafo de poses sustituto (abajo) en lugar del RBPF de Stachniss |
+| **B5** | `DOptGraphSLAM` | `U = IG + w_dopt·ΔD − λ·d`; ΔD = aumento de log t_w(G) (Laplaciano ponderado) descontando el debido a añadir nodos, es decir, lo que aportan los cierres de bucle del camino | Normalización distinta de la de Placed (ver `PoseGraph.predict`) |
+| **B6** | `NBVPlanner` | NBVP 2D: RRT en el espacio libre alrededor del robot, ganancia acumulada `IG·exp(−λ·c)`, se ejecuta el primer tramo de la mejor rama y el resto se reinserta | Si no hay ganancia cerca, va a la frontera más cercana (el original terminaría) |
+| **B7** | `LearnedFrontier` | Una MLP (`.npz`) puntúa las fronteras con 7 rasgos (`LearnedFrontier.FEATURES`) | **No hay pesos entrenados**: sin `B7:<pesos.npz>` (o `strategies.B7.weights`) falla. `save_mlp` escribe el formato |
+| **B8** | `SemanticUtility` | `U = w_e·IG_geom + w_s·IG_sem + w_l·LC − w_c·d` (diseño de la capa semántica, §7); elige también la **orientación final** para la cámara | En sim2d la semántica es simulada (objetos sintéticos, asociación ideal por id) |
+
+**Grafo de poses sustituto** (`core/posegraph.py`, bloque `pose_graph:`). Ni sim2d ni el SLAM actual publican un grafo de poses, así que B4, B5 y B8 construyen uno con la trayectoria estimada: keyframes cada 0,5 m, odometría con información `1/(σ²·d)` y cierres de bucle al volver a menos de 1 m de un keyframe con ≥ 20 nodos de separación y línea de visión (como mucho uno cada 10 keyframes). La varianza de la pose es la resistencia efectiva entre el ancla y el nodo; la D-optimalidad, el log-determinante del Laplaciano reducido. En sim2d esos cierres **no corrigen la deriva** (no hay SLAM): B4/B5 deciden revisitar, pero el mapa no mejora por ello. En ROS el grafo sale de TF `map → base_link`; conectarlo al grafo real del Graph SLAM queda pendiente.
+
+**Semántica** (`core/semantics.py`, bloque `semantics:`). En sim2d se colocan objetos sintéticos junto a las paredes (0,06 por m² libre, con clase COCO) y una cámara simulada (FOV 69°, 4 m, línea de visión, p. de detección 0,8, p. de acertar la clase 0,7). El mapa semántico (Dirichlet por landmark, `tentative` → `confirmed` con 3 observaciones desde 2 poses) se alimenta **para todos los métodos**, así que `meta.json` trae `sem_n_confirmed`, `sem_recall_confirmed`, `sem_class_accuracy`... de todos y se pueden comparar con B8. En ROS, B8 lee el tópico `semantic_topic` (por defecto `/aslam_bench/semantic_map`, `std_msgs/String` con JSON `{"classes": [...], "landmarks": [{"id", "x", "y", "probs", "state", "n_obs"}]}`); sin él, B8 se comporta como B2.
+
+Los pesos por defecto **no están ajustados** (el plan pide ajustarlos en mapas de validación con un presupuesto comparable al del DRL). En RViz, B3 publica sus árboles y puntos frontera y B6 su árbol NBV (marcadores `aslam_bench` 3 y 4).

@@ -3,7 +3,8 @@
 Estructura de un episodio:
   <ep_dir>/meta.json     método, mapa, pose inicial (mundo), semilla, plataforma, terminación...
   <ep_dir>/poses.csv     t, gt_x, gt_y, gt_yaw (mundo), est_x, est_y, est_yaw (marco 'map' del SLAM)
-  <ep_dir>/goals.csv     t, event, x, y, yaw, distance, decision_time, n_frontiers, detail
+  <ep_dir>/goals.csv     t, event, x, y, yaw, distance, decision_time, n_frontiers, detail, info
+                       (info = JSON con los términos de la decisión: tipo de objetivo, utilidad...)
   <ep_dir>/events.csv    t, kind, detail   (colisiones, fallos de navegación, ...)
   <ep_dir>/maps/*.npz    instantáneas del mapa estimado: t, data, resolution, origin
 
@@ -33,7 +34,7 @@ class EpisodeRecorder:
         self._goal_f = open(os.path.join(out_dir, 'goals.csv'), 'w', newline='')
         self._goal = csv.writer(self._goal_f)
         self._goal.writerow(['t', 'event', 'x', 'y', 'yaw', 'distance', 'decision_time',
-                             'n_frontiers', 'detail'])
+                             'n_frontiers', 'detail', 'info'])
         self._ev_f = open(os.path.join(out_dir, 'events.csv'), 'w', newline='')
         self._ev = csv.writer(self._ev_f)
         self._ev.writerow(['t', 'kind', 'detail'])
@@ -50,11 +51,19 @@ class EpisodeRecorder:
     def log_goal(self, t, event, goal=None, info=None):
         info = info or {}
         g = (goal.x, goal.y, goal.yaw, goal.distance) if goal is not None else ('', '', '', '')
+        ginfo = goal.info if goal is not None and getattr(goal, 'info', None) else ''
+        if ginfo:
+            ginfo = json.dumps({k: (round(v, 4) if isinstance(v, float) else v) for k, v in ginfo.items()},
+                               default=float)
         self._goal.writerow([f'{t:.3f}', event, *g, info.get('decision_time', ''),
-                             info.get('n_frontiers', ''), info.get('prev_goal_end', '') or ''])
+                             info.get('n_frontiers', ''), info.get('prev_goal_end', '') or '', ginfo])
 
     def log_event(self, t, kind, detail=''):
         self._ev.writerow([f'{t:.3f}', kind, detail])
+
+    def write_json(self, name, data):
+        with open(os.path.join(self.dir, name), 'w') as f:
+            json.dump(data, f, indent=1, default=float)
 
     def snapshot_map(self, t, grid):
         path = os.path.join(self.dir, 'maps', f'{self.n_snapshots:05d}.npz')

@@ -48,6 +48,82 @@ exploration:
   blacklist_radius: 0.5      # m, objetivos fallidos se vetan en este radio
   random_goal_dist: [1.0, 4.0]  # m, rango de distancia geodésica de B0
 
+# Parámetros de las estrategias B2-B8 (aslam_bench/core/strategies.py). Se guardan en el
+# meta.json de cada episodio (strategy_params). Valores iniciales razonables, SIN AJUSTAR:
+# el plan pide ajustarlos en mapas de validación con un presupuesto comparable al del DRL.
+strategies:
+  ig_radius: 4.0             # m, alcance para estimar la IG (área desconocida visible) de un punto
+  ig_rays: 120               # rayos para esa estimación
+  B2: {lambda_cost: 1.0}     # U = IG(m²) − λ·d(m)
+  B3:                        # RRT-exploration (Umari & Mukhopadhyay 2017); defaults del paquete original
+    eta_global: 1.0          # m, paso del RRT global (persistente)
+    eta_local: 0.5           # m, paso del RRT local (se reinicia en el robot)
+    iters_global: 60         # iteraciones por ciclo de decisión (1 Hz)
+    iters_local: 60
+    info_radius: 1.0         # m, disco para la IG del asignador
+    info_multiplier: 3.0
+    hysteresis_radius: 3.0
+    hysteresis_gain: 2.0
+    cluster_radius: 0.5      # m, agrupamiento de puntos frontera (mean-shift en el original)
+    min_gain: 0.05           # m², puntos con menos IG se descartan
+    max_points: 300
+    max_nodes: 4000
+    seed: 0
+  B4: {lambda_cost: 1.0, w_pose: 1.0, max_lc_candidates: 8, lc_max_dist: 10.0}   # w_pose: m² por bit de pose
+  B5: {lambda_cost: 1.0, w_dopt: 1.0, max_lc_candidates: 8, lc_max_dist: 10.0}   # w_dopt: m² por nat de D-opt
+  B6:                        # NBVP 2D (Bircher et al. 2016)
+    iters: 80                # iteraciones mínimas del RRT por decisión
+    max_iters: 300           # máximo si no aparece ganancia
+    max_nodes: 150
+    step: 1.0                # m, longitud máxima de arista
+    lam: 0.5                 # 1/m, descuento exp(−λ·c) de la ganancia con la distancia
+    min_gain: 0.5            # m², por debajo se considera que no hay nada que ver cerca
+    min_step: 0.6            # m, primer tramo mínimo que se ejecuta
+    box: 5.0                 # m, semiancho de la región de muestreo alrededor del robot
+    ig_rays: 60
+    seed: 0
+  B7: {weights: ''}          # .npz de la red que puntúa fronteras (no incluido: hay que entrenarla)
+  B8:                        # U = w_e·IG_geom + w_s·IG_sem + w_l·LC − w_c·coste (capa semántica §7)
+    w_e: 1.0                 # por m² desconocido visible
+    w_s: 3.0                 # por bit de entropía de clase en el FOV de la cámara
+    w_l: 2.0                 # por bit de reducción de entropía de pose (si var > var_threshold)
+    w_c: 1.0                 # por m de recorrido
+    var_threshold: 0.05      # m², varianza de pose (por eje) a partir de la que se busca cerrar bucles
+    n_yaws: 8                # orientaciones finales evaluadas
+    view_dist: 1.5           # m, distancia de los puntos de vista a un landmark
+    entropy_threshold: 1.0   # bits; landmarks más inciertos (o 'tentative') generan puntos de vista
+    tentative_bonus: 0.5
+    max_visits: 2            # puntos de vista por landmark como mucho
+    max_lc_candidates: 6
+    lc_max_dist: 10.0
+
+# Grafo de poses sustituto (core/posegraph.py) para B4, B5 y B8: keyframes de la trayectoria
+# estimada, odometría con información 1/(σ²·d) y cierres de bucle al volver cerca de un keyframe.
+pose_graph:
+  kf_spacing: 0.5            # m entre keyframes
+  sigma_odom: 0.1            # m/√m
+  sigma_lc: 0.1              # m
+  lc_radius: 1.0             # m
+  lc_min_sep: 20             # keyframes mínimos (10 m) entre los extremos de un cierre de bucle
+  lc_cooldown: 10            # keyframes sin nuevos cierres tras uno (no uno por keyframe al repasar)
+
+# Capa semántica. En sim2d: objetos sintéticos junto a las paredes y cámara simulada (B8 decide
+# con ella; el resto de métodos solo la registran, para comparar sem_* en meta.json).
+# En ROS: B8 lee el mapa semántico del tópico semantic_topic del explorador.
+semantics:
+  sim_enabled: true
+  classes: [chair, couch, bed, dining table, toilet, sink, refrigerator, oven, tv, potted plant]
+  objects_per_m2: 0.06       # densidad de objetos sintéticos (sobre el área libre del mapa)
+  objects_seed: 0            # los objetos dependen solo del mapa y de esta semilla
+  cam_range: 4.0             # m
+  cam_period: 0.5            # s entre imágenes procesadas
+  p_detect: 0.8              # probabilidad de detectar un objeto visible
+  p_correct: 0.7             # probabilidad de acertar la clase
+  sigma_pos: 0.05            # m, ruido de posición de la detección
+  confirm_obs: 3             # 'confirmed' con >= 3 observaciones ...
+  confirm_views: 2           # ... desde >= 2 poses distintas
+  view_sep: 0.5              # m entre poses para contar como distintas
+
 # Agente DRL (TD3 de c3-aslamdrl-platform, rama drl). Solo lo usan los métodos 'DRL...'.
 # Elegir el .pt: aquí, en el bloque `drl:` de la campaña, con 'DRL:<ruta.pt>' / 'DRL:<alias>'
 # en `methods:`, con el argumento drl_weights:=... del launch o con ASLAM_BENCH_DRL_WEIGHTS.

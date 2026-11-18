@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from scipy import ndimage
 
-from .grid import OccGrid, geodesic, inflate
+from .grid import GeodesicTree, OccGrid, inflate
 
 _EIGHT = np.ones((3, 3), dtype=bool)
 
@@ -40,6 +40,36 @@ class MapContext:
     dist: np.ndarray
     frontier_mask: np.ndarray
     frontiers: list = field(default_factory=list)
+    tree: object = None          # GeodesicTree: caminos mínimos desde el robot (B4, B5, B8)
+    robot_yaw: float = 0.0
+    pose_graph: object = None    # PoseGraph sustituto (B4, B5, B8)
+    semantic: object = None      # SemanticMap (B8)
+
+    def path_xy(self, cell):
+        """Camino (lista de (x, y)) desde el robot hasta la celda `cell`, o None."""
+        p = self.tree.path(cell) if self.tree is not None else None
+        if p is None:
+            return None
+        ii, jj = np.array([c[0] for c in p]), np.array([c[1] for c in p])
+        xs, ys = self.grid.cell_to_world(ii, jj)
+        return list(zip(xs.tolist(), ys.tolist()))
+
+    def goal_near(self, x, y, radius):
+        """Celda transitable alcanzable más cercana (geodésicamente) a (x, y) dentro de `radius`."""
+        g = self.grid
+        i, j = (int(v) for v in g.world_to_cell(x, y))
+        r = max(1, int(math.ceil(radius / g.resolution)))
+        h, w = g.shape
+        i0, i1, j0, j1 = max(0, i - r), min(h, i + r + 1), max(0, j - r), min(w, j + r + 1)
+        if i0 >= i1 or j0 >= j1:
+            return None
+        ii, jj = np.ogrid[i0:i1, j0:j1]
+        disk = (ii - i) ** 2 + (jj - j) ** 2 <= r * r
+        d = np.where(disk, self.dist[i0:i1, j0:j1], np.inf)
+        if not np.isfinite(d).any():
+            return None
+        a, b = np.unravel_index(int(np.argmin(d)), d.shape)
+        return int(a + i0), int(b + j0)
 
 
 def frontier_mask(grid: OccGrid, min_unknown_cells: int = 0):
@@ -87,9 +117,10 @@ def build_context(grid: OccGrid, robot_xy, clearance_m, min_frontier_size_m,
     res = grid.resolution
     ri, rj = (int(v) for v in grid.world_to_cell(robot_xy[0], robot_xy[1]))
     passable = passable_mask(grid, clearance_m, (ri, rj))
-    dist, _ = geodesic(passable, (ri, rj), res)
+    tree = GeodesicTree(passable, (ri, rj), res)
+    dist = tree.dist
     fm = frontier_mask(grid, min_unknown_cells)
-    ctx = MapContext(grid, tuple(robot_xy), (ri, rj), passable, dist, fm)
+    ctx = MapContext(grid, tuple(robot_xy[:2]), (ri, rj), passable, dist, fm, tree=tree)
 
     labels, n = ndimage.label(fm, structure=_EIGHT)
     if n == 0:

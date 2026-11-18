@@ -22,6 +22,7 @@ from ..core.explorer import (NAV_ACTIVE, NAV_FAILED, NAV_IDLE, NAV_SUCCEEDED, Ex
 from ..core.grid import OccGrid, geodesic, inflate, se2_apply, se2_inverse_apply, wrap_angle
 from ..core.metrics import CoverageEvaluator
 from ..core.recorder import EpisodeRecorder
+from ..core.semantics import SemanticSim
 
 L_FREE, L_OCC, L_MIN, L_MAX = -1.4, 2.0, -4.0, 4.0   # una observación basta para libre(<25)/ocupado(>=65)
 
@@ -119,14 +120,18 @@ class SimpleNavigator:
         self.tol = cfg['navigation']['goal_tolerance']
         self.clear = robot_clearance(cfg)
         self.goal = None
+        self.goal_yaw = None
         self.path = None
         self.status = NAV_IDLE
         self.t_plan = -1e9
         self.t_progress = 0.0
         self.best_d = math.inf
 
-    def set_goal(self, t, goal_xy):
+    def set_goal(self, t, goal_xy, yaw=None):
+        """Con `yaw`, al llegar gira en el sitio hasta esa orientación (como Nav2 con su
+        tolerancia de yaw); sin él, basta la posición (comportamiento de la iteración 1)."""
         self.goal, self.path, self.status = goal_xy, None, NAV_ACTIVE
+        self.goal_yaw = yaw
         self.t_plan, self.t_progress, self.best_d = -1e9, t, math.inf
         self.recover_until, self.n_coll = -1e9, 0
 
@@ -183,6 +188,11 @@ class SimpleNavigator:
             return -0.1, 0.0
         dg = math.hypot(self.goal[0] - pose[0], self.goal[1] - pose[1])
         if dg < self.tol:
+            if self.goal_yaw is not None:
+                e = float(wrap_angle(self.goal_yaw - pose[2]))
+                if abs(e) > 0.15:
+                    self.t_progress = t
+                    return 0.0, math.copysign(min(self.wmax, max(0.3, 2.0 * abs(e))), e)
             self.status = NAV_SUCCEEDED
             return 0.0, 0.0
         if dg < self.best_d - 0.05:
@@ -218,6 +228,9 @@ def run_episode(gt: OccGrid, start_pose, method, cfg, out_dir, meta_extra=None, 
     mapper = LogOddsMapper(gt, start_pose, cfg)
     nav = SimpleNavigator(cfg)
     explorer = ExplorerLogic(method, cfg, seed=seed)
+    sem_cfg = cfg.get('semantics') or {}
+    sem = SemanticSim(gt, start_pose, cfg, seed=seed) if sem_cfg.get('sim_enabled', True) else None
+    t_cam = -1e9
     cov_eval = CoverageEvaluator(gt, start_pose, cfg)
     clear_gt = ndimage.distance_transform_edt(~(gt.occ_mask() | gt.unknown_mask())) * gt.resolution
     radius = cfg['platform']['base']['radius']
@@ -225,7 +238,7 @@ def run_episode(gt: OccGrid, start_pose, method, cfg, out_dir, meta_extra=None, 
     meta = dict(method=explorer.strategy.name, backend='sim2d', loc_mode=loc_mode,
                 start_pose=list(map(float, start_pose)), seed=int(seed), t_max=ep['t_max'],
                 coverage_target=ep['coverage_target'], platform=cfg['platform']['name'],
-                odom_noise=list(odom_noise))
+                odom_noise=list(odom_noise), strategy_params=explorer.strategy.params())
     meta.update(meta_extra or {})
     vel_mode = explorer.velocity_mode            # política que emite (v, w): DRL
     if vel_mode:
@@ -250,14 +263,18 @@ def run_episode(gt: OccGrid, start_pose, method, cfg, out_dir, meta_extra=None, 
             mapper.integrate(est, last_scan, lidar.angles)
             grid = mapper.grid()
             t_lidar = t
+        if sem is not None and t - t_cam >= sem.period - 1e-9:
+            explorer.semantic.integrate(sem.observe(true, est), est[:2])
+            t_cam = t
         if t - t_dec >= cfg['exploration']['replan_period'] - 1e-9:
-            act = explorer.update(t, grid, est[:2], nav.status)
+            act = explorer.update(t, grid, est, nav.status)
             if vel_mode and dec_times:
                 # una fila por periodo de decisión con el tiempo medio de inferencia
                 rec.log_goal(t, 'policy', None, dict(act.info, decision_time=float(np.mean(dec_times))))
                 dec_times = []
             if act.kind == 'goal':
-                nav.set_goal(t, (act.goal.x, act.goal.y))
+                nav.set_goal(t, (act.goal.x, act.goal.y),
+                             act.goal.yaw if act.goal.info.get('orient') else None)
                 rec.log_goal(t, 'goal', act.goal, act.info)
             elif act.kind == 'done':
                 rec.log_goal(t, 'done', None, act.info)
@@ -333,6 +350,10 @@ def run_episode(gt: OccGrid, start_pose, method, cfg, out_dir, meta_extra=None, 
         est[2] = float(wrap_angle(est[2] + wo * dt))
         t = round(t + dt, 6)
 
+    extra = dict(explorer.stats())
+    if sem is not None:
+        extra.update(sem.evaluate(explorer.semantic))
+        rec.write_json('semantic.json', sem.dump(explorer.semantic))
     rec.finish(termination, duration=t, wall_time=time.perf_counter() - wall0,
-               n_collisions=collisions, **explorer.stats())
+               n_collisions=collisions, **extra)
     return rec.meta

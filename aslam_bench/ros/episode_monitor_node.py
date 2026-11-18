@@ -42,6 +42,7 @@ from .explorer_node import EVENTS_TOPIC
 class _G:  # objetivo mínimo para EpisodeRecorder.log_goal
     def __init__(self, d):
         self.x, self.y, self.yaw, self.distance = d.get('x'), d.get('y'), d.get('yaw'), d.get('distance')
+        self.info = d.get('goal_info') or {}
 
 
 class EpisodeMonitor(Node):
@@ -134,7 +135,7 @@ class EpisodeMonitor(Node):
             self.explorer_done = True
         elif d['event'] == 'policy':        # política de velocidad (DRL): tiempo de inferencia
             self.rec.log_goal(t, 'policy', None, d.get('info'))
-        elif d['event'] == 'meta':          # datos del agente (ruta y hash de los pesos)
+        elif d['event'] == 'meta':          # datos del agente o parámetros/estadísticas de la estrategia
             self.rec.meta.update(d.get('info') or {})
         elif d['event'] == 'nav_failed':
             self.rec.log_event(t, 'nav_failed', json.dumps(d.get('info', {})))

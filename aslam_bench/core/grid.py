@@ -208,6 +208,38 @@ def geodesic(passable, start_ij, resolution, return_path_to=None):
     return dist, path
 
 
+class GeodesicTree:
+    """Como `geodesic`, pero conserva el árbol de caminos mínimos para extraer varios caminos."""
+
+    def __init__(self, passable, start_ij, resolution):
+        passable = passable.copy()
+        si, sj = start_ij
+        h, w = passable.shape
+        self.shape = (h, w)
+        self.dist = np.full((h, w), np.inf)
+        self.pred = None
+        if not (0 <= si < h and 0 <= sj < w):
+            return
+        passable[si, sj] = True
+        g, self.idx = grid_graph(passable, resolution)
+        d, self.pred = dijkstra(g, directed=False, indices=self.idx[si, sj], return_predecessors=True)
+        self.dist[passable] = d[self.idx[passable]]
+        self.flat_nodes = np.flatnonzero(passable)
+
+    def path(self, goal_ij):
+        """Celdas (i, j) desde el inicio hasta goal_ij, o None si no es alcanzable."""
+        gi, gj = goal_ij
+        h, w = self.shape
+        if self.pred is None or not (0 <= gi < h and 0 <= gj < w) or not np.isfinite(self.dist[gi, gj]):
+            return None
+        node, out = self.idx[gi, gj], []
+        while node >= 0:
+            out.append(divmod(int(self.flat_nodes[node]), w))
+            node = self.pred[node]
+        out.reverse()
+        return out
+
+
 # ----------------------------------------------------------------------------- transformaciones SE(2)
 
 def se2_apply(pose, x, y):

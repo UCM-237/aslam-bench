@@ -1,12 +1,18 @@
-"""Nodo de exploración: envuelve ExplorerLogic (B0, B1, ...) y envía objetivos a Nav2.
+"""Nodo de exploración: envuelve ExplorerLogic (B0..B8) y envía objetivos a Nav2.
 
 Suscripciones : /map (nav_msgs/OccupancyGrid), TF map -> base_link
+                semantic_topic (std_msgs/String, JSON) mapa semántico para B8: lista de
+                landmarks {id, x, y, probs|alpha, state, n_obs} o {classes, landmarks}
+                en el marco global; si nadie lo publica, B8 trabaja sin semántica
 Acción        : navigate_to_pose (nav2_msgs/action/NavigateToPose)
 Publica       : /aslam_bench/explorer_events (std_msgs/String, JSON) para el monitor
                 /aslam_bench/markers (visualization_msgs/MarkerArray) fronteras y objetivo, para RViz
 
-Parámetros: strategy (B0|B1|...), seed, platform (ruta a platform.yaml),
-            map_topic, global_frame, robot_frame, nav_action.
+Parámetros: strategy (B0..B8, B7:<pesos.npz>), seed, platform (ruta a platform.yaml),
+            map_topic, global_frame, robot_frame, nav_action, semantic_topic.
+
+B4, B5 y B8 usan el grafo de poses sustituto de core/posegraph.py, construido con la
+trayectoria map -> base_link (no el grafo interno del SLAM).
 """
 from __future__ import annotations
 
@@ -43,6 +49,7 @@ class ExplorerNode(Node):
         self.global_frame = p('global_frame', 'map').value
         self.robot_frame = p('robot_frame', 'base_link').value
         nav_action = p('nav_action', 'navigate_to_pose').value
+        semantic_topic = p('semantic_topic', '/aslam_bench/semantic_map').value
 
         self.cfg = load_platform(platform)
         self.logic = ExplorerLogic(self.strategy, self.cfg, seed=seed)
@@ -50,10 +57,12 @@ class ExplorerNode(Node):
         self.nav_status = NAV_IDLE
         self.goal_handle = None
         self.goal_seq = 0
+        self.meta_sent = False
 
         qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                          reliability=ReliabilityPolicy.RELIABLE)
         self.create_subscription(OccupancyGrid, self.map_topic, self._on_map, qos)
+        self.create_subscription(String, semantic_topic, self._on_semantic, qos)
         self.events = self.create_publisher(String, EVENTS_TOPIC, 10)
         self.markers = self.create_publisher(MarkerArray, MARKERS_TOPIC, qos)
         self.tf_buffer = Buffer()
@@ -69,13 +78,19 @@ class ExplorerNode(Node):
         except ValueError as e:
             self.get_logger().error(str(e))
 
+    def _on_semantic(self, msg):
+        try:
+            self.logic.semantic.from_json(msg.data)
+        except (ValueError, KeyError, TypeError) as e:
+            self.get_logger().error(f'Mapa semántico no válido: {e}', throttle_duration_sec=10.0)
+
     def _now(self):
         return self.get_clock().now().nanoseconds * 1e-9
 
     def _publish(self, kind, goal=None, info=None):
         d = dict(t=self._now(), event=kind, info=info or {})
         if goal is not None:
-            d.update(x=goal.x, y=goal.y, yaw=goal.yaw, distance=goal.distance)
+            d.update(x=goal.x, y=goal.y, yaw=goal.yaw, distance=goal.distance, goal_info=goal.info)
         self.events.publish(String(data=json.dumps(d, default=float)))
 
     def _tick(self):
@@ -88,7 +103,10 @@ class ExplorerNode(Node):
         if pose is None:
             self.get_logger().warn('Sin TF map->base_link', throttle_duration_sec=5.0)
             return
-        act = self.logic.update(self._now(), self.grid, pose[:2], self.nav_status)
+        if not self.meta_sent:
+            self._publish('meta', dict(strategy_params=self.logic.strategy.params()))
+            self.meta_sent = True
+        act = self.logic.update(self._now(), self.grid, pose, self.nav_status)
         if act.kind == 'goal':
             self._send_goal(act.goal)
             self._publish('goal', act.goal, act.info)
@@ -96,6 +114,8 @@ class ExplorerNode(Node):
         elif act.kind == 'done':
             self._publish_markers(None)
             self._cancel()
+            self._publish('meta', dict(self.logic.stats(), **{
+                f'sem_{k}': v for k, v in self.logic.semantic.summary().items()}))
             self._publish('done', None, act.info)
             self.get_logger().info('Sin fronteras alcanzables: exploración terminada')
 
@@ -131,7 +151,17 @@ class ExplorerNode(Node):
             qx, qy, qz, qw = quat_from_yaw(goal.yaw)
             arrow.pose.orientation.x, arrow.pose.orientation.y = qx, qy
             arrow.pose.orientation.z, arrow.pose.orientation.w = qz, qw
-        self.markers.publish(MarkerArray(markers=[cells, cands, arrow]))
+        # datos propios de la estrategia (B3: árboles RRT y puntos frontera; B6: árbol NBV)
+        extra = self.logic.strategy.viz() or {}
+        pts = marker(3, Marker.POINTS, (0.08, 0.08, 0.0), (0.85, 0.2, 0.85, 0.9))
+        pts.points = [pt(x, y, 0.08) for x, y in extra.get('points', [])]
+        segs = marker(4, Marker.LINE_LIST, (0.01, 0.0, 0.0), (0.4, 0.4, 0.4, 0.6))
+        for (x0, y0), (x1, y1) in extra.get('segments', []):
+            segs.points += [pt(x0, y0, 0.02), pt(x1, y1, 0.02)]
+        for m in (pts, segs):
+            if not m.points:
+                m.action = Marker.DELETE
+        self.markers.publish(MarkerArray(markers=[cells, cands, arrow, pts, segs]))
 
     # ------------------------------------------------------------------ Nav2
     def _cancel(self):
